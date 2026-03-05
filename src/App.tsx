@@ -1,28 +1,83 @@
-import { Suspense } from 'react';
-import './App.css';
-import { atom, useAtom } from 'jotai';
-import { renderWithSideEffect } from './helpers';
+import { Suspense, use, useEffect, useState, type Usable } from "react";
+import "./App.css";
+import { atom, useAtom, useAtomValue, getDefaultStore, type Atom } from "jotai";
+import { renderWithSideEffect, wait } from "./helpers";
 
-const textAtom = atom('my-text');
+const textAtom = atom("my-text");
 
-const asyncAtom = atom(async (get) => {
-  const { value, dispose: _whoNeedsDispose } = await renderWithSideEffect(
-    get(textAtom)
-  );
-  return value;
-});
+const oldDisposeRef = atom({ dispose: async () => {} });
 
-const RenderComponent = () => {
-  return (
-    <Suspense fallback="loading">
-      <UseAtomValue />
-    </Suspense>
-  );
+const refreshAtom = atom(0);
+
+const refresher = atom(
+  (get) => get(refreshAtom),
+  (_, set) => set(refreshAtom, (c) => c + 1),
+);
+
+let counter = 0;
+
+const widgetAtom = atom(
+  async (get) => {
+    const _counter = counter++;
+    console.log("run get", _counter);
+    get(refresher);
+    const ref = get(oldDisposeRef);
+    const getNewRes = (async () => {
+      console.log("creating", _counter);
+      await ref.dispose();
+      return await renderWithSideEffect(get(textAtom) + _counter);
+    })();
+    const resPromise = getNewRes.then((x) => x.value);
+    console.log("adding dispose", _counter);
+    ref.dispose = () => getNewRes.then((x) => x.dispose());
+    return resPromise;
+  },
+  (get, set) => {
+    console.log("cleanup");
+    get(oldDisposeRef).dispose();
+    set(refresher);
+  },
+);
+
+widgetAtom.onMount = (set) => {
+  return () => {
+    set();
+  };
 };
 
-const UseAtomValue = () => {
-  const [val] = useAtom(asyncAtom);
-  return <>{val}</>;
+const UpperCased = ({ promise }: { promise: Promise<string> }) => {
+  const text = use(promise);
+  return <span>{text}</span>;
+};
+
+const eternalPromise: Promise<never> = {
+  [Symbol.toStringTag]: "eternal promise from @skbkontur/widget-consumer-jotai-utils",
+  then: () => eternalPromise,
+  catch: () => eternalPromise,
+  finally: () => eternalPromise,
+};
+
+const useAsyncAtom = (asyncAtom: Atom<Promise<string>>) => {
+  const [promise, setPromise] = useState<Promise<string | never>>(eternalPromise);
+  const store = getDefaultStore();
+  const handle = () => {
+    setPromise(store.get(asyncAtom));
+  };
+  useEffect(() => {
+    handle();
+    const unsub = store.sub(asyncAtom, () => {
+      handle();
+    });
+    return () => {
+      unsub();
+    };
+  }, []);
+  return promise;
+};
+
+const AsyncComponent = () => {
+  const promise = useAsyncAtom(widgetAtom);
+  return <UpperCased promise={promise} />;
 };
 
 const showAtom = atom(true);
@@ -33,7 +88,7 @@ function Comp() {
     <div>
       <input value={text} onChange={(e) => setText(e.target.value)} />
       <input type="checkbox" checked={isShowed} onChange={() => setIsShowed(!isShowed)} />
-      {isShowed && <RenderComponent />}
+      <Suspense fallback="Loading...">{isShowed && <AsyncComponent />}</Suspense>
     </div>
   );
 }

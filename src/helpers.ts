@@ -20,10 +20,12 @@ function memo<T>(fn: () => T): () => T {
 export async function renderWithSideEffect(text: string) {
   changeSideEffect(+1);
   await wait(200);
+  console.log("widget: creating widget api", text)
   return {
     value: text.toUpperCase(),
     dispose: memo(async () => {
       await wait(200);
+      console.log('widget: disposing', text)
       changeSideEffect(-1);
     }),
   };
