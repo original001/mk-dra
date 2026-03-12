@@ -1,96 +1,86 @@
-import { Suspense, use, useEffect, useState, type Usable } from "react";
+import { Suspense, use, useMemo } from "react";
 import "./App.css";
-import { atom, useAtom, useAtomValue, getDefaultStore, type Atom } from "jotai";
-import { renderWithSideEffect, wait } from "./helpers";
+import { atom, useAtom } from "jotai";
+import { type Disposable, type WidgetApi } from "./npm-loader";
+import { useAsyncAtom, useSyncedAtom } from "./helpers";
+import { createDra } from "./createDra";
+import type { WritableAtom } from "jotai";
+import { ErrorBoundary } from "react-error-boundary";
 
 const textAtom = atom("my-text");
 
-const oldDisposeRef = atom({ dispose: async () => {} });
-
-const refreshAtom = atom(0);
-
-const refresher = atom(
-  (get) => get(refreshAtom),
-  (_, set) => set(refreshAtom, (c) => c + 1),
-);
-
-let counter = 0;
-
-const widgetAtom = atom(
-  async (get) => {
-    const _counter = counter++;
-    console.log("run get", _counter);
-    get(refresher);
-    const ref = get(oldDisposeRef);
-    const getNewRes = (async () => {
-      console.log("creating", _counter);
-      await ref.dispose();
-      return await renderWithSideEffect(get(textAtom) + _counter);
-    })();
-    const resPromise = getNewRes.then((x) => x.value);
-    console.log("adding dispose", _counter);
-    ref.dispose = () => getNewRes.then((x) => x.dispose());
-    return resPromise;
-  },
-  (get, set) => {
-    console.log("cleanup");
-    get(oldDisposeRef).dispose();
-    set(refresher);
-  },
-);
-
-widgetAtom.onMount = (set) => {
-  return () => {
-    set();
-  };
-};
-
-const UpperCased = ({ promise }: { promise: Promise<string> }) => {
-  const text = use(promise);
+const UpperCased = ({ text }: { text: string }) => {
   return <span>{text}</span>;
 };
 
-const eternalPromise: Promise<never> = {
-  [Symbol.toStringTag]: "eternal promise from @skbkontur/widget-consumer-jotai-utils",
-  then: () => eternalPromise,
-  catch: () => eternalPromise,
-  finally: () => eternalPromise,
-};
-
-const useAsyncAtom = (asyncAtom: Atom<Promise<string>>) => {
-  const [promise, setPromise] = useState<Promise<string | never>>(eternalPromise);
-  const store = getDefaultStore();
-  const handle = () => {
-    setPromise(store.get(asyncAtom));
-  };
-  useEffect(() => {
-    handle();
-    const unsub = store.sub(asyncAtom, () => {
-      handle();
-    });
-    return () => {
-      unsub();
-    };
-  }, []);
-  return promise;
-};
-
-const AsyncComponent = () => {
-  const promise = useAsyncAtom(widgetAtom);
-  return <UpperCased promise={promise} />;
+const AsyncComponent = ({ promise }: { promise: Promise<Disposable & { value: string }> }) => {
+  const renderApi = use(promise);
+  return <UpperCased text={renderApi.value} />;
 };
 
 const showAtom = atom(true);
-function Comp() {
-  const [text, setText] = useAtom(textAtom);
+
+const useRenderDra = (moduleDra: WritableAtom<Promise<WidgetApi>, [], void>, text: string) => {
+  const syncParams = useMemo(() => ({ text }), [text]);
+  const syncParamsAtom = useSyncedAtom(syncParams);
+
+  const { asyncAtom, refresh } = useMemo(
+    () => createDra((syncParams, result) => result!.getValue(syncParams.text), syncParamsAtom, "render", moduleDra),
+    [moduleDra],
+  );
+
+  const renderPromise = useAsyncAtom(asyncAtom);
+
+  return { promise: renderPromise, refresh };
+};
+
+function App({ moduleDra }: { moduleDra: WritableAtom<Promise<WidgetApi>, [], void> }) {
   const [isShowed, setIsShowed] = useAtom(showAtom);
   return (
-    <div>
-      <input value={text} onChange={(e) => setText(e.target.value)} />
+    <Suspense fallback="Loading...">
       <input type="checkbox" checked={isShowed} onChange={() => setIsShowed(!isShowed)} />
-      <Suspense fallback="Loading...">{isShowed && <AsyncComponent />}</Suspense>
-    </div>
+      {isShowed && <Comp moduleDra={moduleDra} />}
+    </Suspense>
   );
 }
 
-export default Comp;
+function Comp({ moduleDra }: { moduleDra: WritableAtom<Promise<WidgetApi>, [], void> }) {
+  const [text, setText] = useAtom(textAtom);
+  const { promise, refresh } = useRenderDra(moduleDra, text);
+  return (
+    <div>
+      <input value={text} onChange={(e) => setText(e.target.value)} />
+      <ErrorBoundary
+        fallbackRender={({ error }) => (
+          <>
+            <h1>Ошибка {error.message}</h1>
+            <button
+              onClick={() => {
+                refresh();
+              }}
+            >
+              reset
+            </button>
+          </>
+        )}
+        resetKeys={[promise]}
+      >
+        <Suspense fallback="Loading...">
+          <AsyncComponent promise={promise} />
+        </Suspense>
+      </ErrorBoundary>
+    </div>
+  );
+}
+// function App() {
+//   const [isShowed, setIsShowed] = useState(true);
+//   return (
+//     <>
+//       <input type="checkbox" checked={isShowed} onChange={() => setIsShowed(!isShowed)} />
+
+//       {isShowed && <Context />}
+//     </>
+//   );
+// }
+
+export default App;
