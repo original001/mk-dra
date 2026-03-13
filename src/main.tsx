@@ -3,9 +3,11 @@ import "./index.css";
 import App from "./App.tsx";
 import { createDra } from "./createDra.tsx";
 import { importWidgetApi } from "./npm-loader.ts";
-import { atom, getDefaultStore } from "jotai";
+import { atom } from "jotai";
+import { createAsyncCancellationTokenSource } from "@skbkontur/async-cancellation-token";
 
-const {asyncAtom} = createDra(() => importWidgetApi(), atom({}), "module");
+
+const { asyncAtom } = createDra((_, token) => importWidgetApi(token), atom({}), "module");
 
 // const store = getDefaultStore();
 // const unsub = store.sub(asyncAtom, () => {});

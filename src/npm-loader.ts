@@ -1,3 +1,14 @@
+import {
+  beginCancellationTokenScope,
+  type AsyncCancellationToken,
+} from "@skbkontur/async-cancellation-token";
+import {
+  createSuccess,
+  withCancellationToken,
+  type WidgetFaultConstraint,
+  type WithCancellationTokenOriginalFunction,
+} from "@skbkontur/loader-builder";
+
 export function wait(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -16,47 +27,56 @@ function memo<T>(fn: () => T): () => T {
     return cache;
   };
 }
-
-export interface Disposable {
-  dispose: () => Promise<void>;
-}
-
 export type WidgetApi = {
-  getValue: (text: string) => Promise<
-    {
-      value: string;
-    } & Disposable
+  getValue: WithCancellationTokenOriginalFunction<
+    WidgetFaultConstraint,
+    object,
+    { text: string },
+    WidgetFaultConstraint,
+    string
   >;
-} & Disposable;
+};
 
-export async function importWidgetApi(): Promise<WidgetApi> {
+export async function importWidgetApi(token: AsyncCancellationToken<any, object>): Promise<WidgetApi> {
+  console.log("widget: creating module");
+
+  const scope = beginCancellationTokenScope(token);
+
+  if (scope.isCancelled) {
+    throw new Error("Только что созданный скоуп отменён");
+  }
+
   await wait(200);
   changeSideEffect(+1);
-  console.log("widget: creating module");
-  return {
-    getValue: async (text: string) => {
-      await wait(200);
-      const shouldThrow = Math.random() < 0.5;
-      // const shouldThrow = true;
 
-      if (shouldThrow) {
-        throw new Error("Operation failed randomly");
-      }
-      console.log("render: creating", text);
-      changeSideEffect(+1);
-      return {
-        value: text.toUpperCase(),
-        dispose: memo(async () => {
-          await wait(200);
+  scope.register(async () => {
+    changeSideEffect(-1);
+  });
+
+  scope.dispose();
+
+  return {
+    getValue: withCancellationToken({
+      token,
+      handler: async ({ text, token }) => {
+        await wait(200);
+
+        changeSideEffect(+1);
+
+        token.register(async () => {
           console.log("render: disposing", text);
           changeSideEffect(-1);
-        }),
-      };
-    },
-    dispose: memo(async () => {
-      await wait(200);
-      console.log("widget: disposing module");
-      changeSideEffect(-1);
+          return createSuccess({});
+        });
+
+        const shouldThrow = Math.random() < 0.5;
+
+        if (shouldThrow) {
+          throw new Error("Operation failed randomly");
+        }
+        console.log("render: creating", text);
+        return createSuccess(text.toUpperCase());
+      },
     }),
   };
 }

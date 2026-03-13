@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@skbkontur/async-cancellation-token": "^0.3.7",
+    "@skbkontur/loader-builder": "^12.0.8",
     "jotai": "^2.13.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
