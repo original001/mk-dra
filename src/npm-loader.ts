@@ -1,10 +1,10 @@
+import { beginCancellationTokenScope, type AsyncCancellationToken } from "@skbkontur/async-cancellation-token";
 import {
-  beginCancellationTokenScope,
-  type AsyncCancellationToken,
-} from "@skbkontur/async-cancellation-token";
-import {
+  createFailure,
   createSuccess,
   withCancellationToken,
+  type OperationResult,
+  type UnexpectedFault,
   type WidgetFaultConstraint,
   type WithCancellationTokenOriginalFunction,
 } from "@skbkontur/loader-builder";
@@ -28,16 +28,17 @@ function memo<T>(fn: () => T): () => T {
   };
 }
 export type WidgetApi = {
-  getValue: WithCancellationTokenOriginalFunction<
-    WidgetFaultConstraint,
-    object,
-    { text: string },
-    WidgetFaultConstraint,
-    string
-  >;
+  getValue: WithCancellationTokenOriginalFunction<WidgetFaultConstraint, object, { text: string }, AllFaults, string>;
 };
 
-export async function importWidgetApi(token: AsyncCancellationToken<any, object>): Promise<WidgetApi> {
+export type ImportResult = Promise<OperationResult<AllFaults, WidgetApi>>;
+
+export type AllFaults = RenderFault | ImportFault | UnexpectedFault;
+
+export type RenderFault = { type: "render-fault"; message: "" };
+export type ImportFault = { type: "import-fault"; message: "" };
+
+export async function importWidgetApi(token: AsyncCancellationToken<any, object>): ImportResult {
   console.log("widget: creating module");
 
   const scope = beginCancellationTokenScope(token);
@@ -55,7 +56,14 @@ export async function importWidgetApi(token: AsyncCancellationToken<any, object>
 
   scope.dispose();
 
-  return {
+  const shouldThrow = Math.random() < 0.5;
+
+  if (shouldThrow) {
+    console.error("error in module");
+    return createFailure<ImportFault>({ type: "import-fault", message: "" });
+  }
+
+  return createSuccess({
     getValue: withCancellationToken({
       token,
       handler: async ({ text, token }) => {
@@ -72,11 +80,12 @@ export async function importWidgetApi(token: AsyncCancellationToken<any, object>
         const shouldThrow = Math.random() < 0.5;
 
         if (shouldThrow) {
-          throw new Error("Operation failed randomly");
+          console.error("error in render");
+          return createFailure<RenderFault>({ type: "render-fault", message: "" });
         }
         console.log("render: creating", text);
         return createSuccess(text.toUpperCase());
       },
     }),
-  };
+  });
 }

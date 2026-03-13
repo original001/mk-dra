@@ -1,12 +1,17 @@
 import { createAsyncCancellationTokenSource, type AsyncCancellationToken } from "@skbkontur/async-cancellation-token";
+import { createFailure, type OperationResult } from "@skbkontur/loader-builder";
 import { type PrimitiveAtom, atom, getDefaultStore } from "jotai";
 import type { WritableAtom } from "jotai";
 
-export function createDra<TValue, TParams, TParentResult>(
-  create: (syncParams: TParams, token: AsyncCancellationToken<any, object>, parentResult?: TParentResult) => Promise<TValue>,
+export function createDra<TValue, TParams, TParentResult, TParentFault, TCreateFault>(
+  create: (
+    syncParams: TParams,
+    token: AsyncCancellationToken<any, object>,
+    parentResult: TParentResult,
+  ) => Promise<OperationResult<TCreateFault, TValue>>,
   syncParams: PrimitiveAtom<TParams>,
   name: string,
-  parentDra?: WritableAtom<Promise<TParentResult>, [], void>,
+  parentDra: WritableAtom<Promise<OperationResult<TParentFault, TParentResult>>, [], void>,
 ) {
   const store = getDefaultStore();
 
@@ -17,7 +22,7 @@ export function createDra<TValue, TParams, TParentResult>(
   const refreshAtom = atom(0);
 
   let counter = 0;
-  const lastMutableTcsRef = atom({cancel: async (_reason: object) => [] as void[]})
+  const lastMutableTcsRef = atom({ cancel: async (_reason: object) => [] as void[] });
 
   const disposeRefreshAtom = atom(
     async (get) => {
@@ -25,15 +30,23 @@ export function createDra<TValue, TParams, TParentResult>(
       console.log("run get", name, _counter);
       get(refresher);
       const _syncParams = get(syncParams);
-      const result = parentDra ? await get(parentDra) : undefined;
-
-      const tcs  = createAsyncCancellationTokenSource<void, object>();
-
       await get(lastMutableTcsRef).cancel({});
 
-      get(lastMutableTcsRef).cancel = tcs.cancel
+      const result = await get(parentDra);
 
-      return await create(_syncParams, tcs.token, result);
+      if (!result.success) {
+        return createFailure(result.fault);
+      }
+
+      const tcs = createAsyncCancellationTokenSource<void, object>();
+
+      get(lastMutableTcsRef).cancel = tcs.cancel;
+
+      const createResult = await create(_syncParams, tcs.token, result.value);
+      if (!createResult.success) {
+        tcs.cancel({});
+      }
+      return createResult;
     },
     (get, set) => {
       console.log("cleanup");
